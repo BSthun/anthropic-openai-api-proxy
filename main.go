@@ -329,7 +329,7 @@ func main() {
 					errorChunk := map[string]any{
 						"type": "error",
 						"error": map[string]any{
-							"message": "Failed to generate response from Ollama",
+							"message": "ollama response error",
 							"type":    "server_error",
 						},
 					}
@@ -389,7 +389,7 @@ func main() {
 
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error":   "Failed to generate response from Ollama",
+				"error":   "ollama response error",
 				"details": err.Error(),
 			})
 		}
