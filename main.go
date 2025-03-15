@@ -133,8 +133,8 @@ func main() {
 
 		// * prepare options
 		options := map[string]any{
-			"num_ctx":     8192,
-			"num_predict": 8192,
+			"num_ctx":     32768,
+			"num_predict": 32768,
 		}
 
 		// * set max tokens if provided
