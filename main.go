@@ -2,6 +2,7 @@ package main
 
 import (
 	fiber2 "anthropic-openai-api-proxy/common/fiber"
+	"anthropic-openai-api-proxy/procedure"
 	"anthropic-openai-api-proxy/type/extern"
 	"bufio"
 	"context"
@@ -113,6 +114,16 @@ func main() {
 						}
 					case "image":
 						// TODO: handle image content
+					case "tool_use":
+						// Process tool_use content
+						if content.ToolUse != nil {
+							// TODO: handle tool_use content
+						}
+					case "tool_result":
+						// Process tool_result content
+						if content.ToolResult != nil {
+							// TODO: handle tool_result content
+						}
 					}
 				}
 			}
@@ -146,7 +157,7 @@ func main() {
 			Stream:    gut.Ptr(false),
 			Format:    nil,
 			KeepAlive: nil,
-			Tools:     nil,
+			Tools:     procedure.ConvertAnthropicToolsToOllama(body.Tools),
 			Options:   options,
 		}
 
@@ -189,15 +200,68 @@ func main() {
 					_, _ = fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", messageStartData)
 				}
 
-				// * send content_block_start event
-				contentBlockStart := map[string]interface{}{
-					"type":  "content_block_start",
-					"index": 0,
-					"content_block": map[string]interface{}{
-						"type": "text",
-						"text": "",
-					},
+				// Initial flag to track if we need to handle tool calls for streaming
+				hasToolCalls := false
+				var toolCallId string
+				var toolCallName string
+				var toolCallArgs string
+
+				// * call ollama with streaming to check for tool calls
+				err = client.Chat(context.Background(), request, func(resp api.ChatResponse) error {
+					if len(resp.Message.ToolCalls) > 0 && !hasToolCalls {
+						hasToolCalls = true
+						toolCallId = fmt.Sprintf("tc_%s", *gut.Random(gut.RandomSet.MixedAlphaNum, 24))
+						if len(resp.Message.ToolCalls) > 0 {
+							toolCallName = resp.Message.ToolCalls[0].Function.Name
+							toolCallArgs = resp.Message.ToolCalls[0].Function.Arguments.String()
+						}
+						return nil
+					}
+					return nil
+				})
+
+				// * send content_block_start event based on whether we have tool calls
+				contentBlockType := "text"
+				contentBlock := map[string]interface{}{
+					"type": "text",
+					"text": "",
 				}
+				_ = contentBlockType
+
+				if hasToolCalls {
+					contentBlockType = "tool_use"
+
+					// Parse arguments from string to map if possible
+					var inputMap map[string]interface{}
+					var toolInput interface{} = map[string]interface{}{}
+
+					if toolCallArgs != "" {
+						if err := json.Unmarshal([]byte(toolCallArgs), &inputMap); err == nil {
+							toolInput = inputMap
+						} else {
+							toolInput = toolCallArgs
+						}
+					}
+
+					toolUse := map[string]interface{}{
+						"id":    toolCallId,
+						"type":  "function",
+						"name":  toolCallName,
+						"input": toolInput,
+					}
+
+					contentBlock = map[string]interface{}{
+						"type":     "tool_use",
+						"tool_use": toolUse,
+					}
+				}
+
+				contentBlockStart := map[string]interface{}{
+					"type":          "content_block_start",
+					"index":         0,
+					"content_block": contentBlock,
+				}
+
 				if contentBlockStartData, err := json.Marshal(contentBlockStart); err == nil {
 					_, _ = fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", contentBlockStartData)
 				}
@@ -212,25 +276,57 @@ func main() {
 
 				// * call ollama with streaming
 				var accumulatedResponse string
+				var toolCallData map[string]interface{}
 				outputTokens := 0
+
 				err = client.Chat(context.Background(), request, func(resp api.ChatResponse) error {
 					// * accumulate response
 					accumulatedResponse += resp.Message.Content
-					outputTokens += 1 // rough estimation
+					outputTokens += 1
 
-					// * create anthropic streaming response chunk
-					chunk := map[string]interface{}{
-						"type":  "content_block_delta",
-						"index": 0,
-						"delta": map[string]interface{}{
-							"type": "text_delta",
-							"text": resp.Message.Content,
-						},
-					}
+					// Check for tool calls
+					if len(resp.Message.ToolCalls) > 0 {
+						// Handle tool call streaming
+						for _, tc := range resp.Message.ToolCalls {
+							// Only process if we have function data
+							if tc.Function.Name != "" {
+								// Create or update tool call data
+								toolCallData = map[string]interface{}{
+									"name":  tc.Function.Name,
+									"input": tc.Function.Arguments,
+								}
 
-					// * serialize and send chunk
-					if chunkData, err := json.Marshal(chunk); err == nil {
-						_, _ = fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", chunkData)
+								// Create Anthropic delta format
+								chunk := map[string]interface{}{
+									"type":  "content_block_delta",
+									"index": 0,
+									"delta": map[string]interface{}{
+										"type":     "tool_use_delta",
+										"tool_use": toolCallData,
+									},
+								}
+
+								// Serialize and send chunk
+								if chunkData, err := json.Marshal(chunk); err == nil {
+									_, _ = fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", chunkData)
+								}
+							}
+						}
+					} else if resp.Message.Content != "" {
+						// Regular text content streaming
+						chunk := map[string]interface{}{
+							"type":  "content_block_delta",
+							"index": 0,
+							"delta": map[string]interface{}{
+								"type": "text_delta",
+								"text": resp.Message.Content,
+							},
+						}
+
+						// * serialize and send chunk
+						if chunkData, err := json.Marshal(chunk); err == nil {
+							_, _ = fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", chunkData)
+						}
 					}
 
 					return nil
@@ -289,8 +385,13 @@ func main() {
 
 		// * call ollama for non-streaming response
 		var output string
+		var toolCalls []api.ToolCall
+
 		err = client.Chat(context.Background(), request, func(resp api.ChatResponse) error {
 			output += resp.Message.Content
+			if len(resp.Message.ToolCalls) > 0 {
+				toolCalls = resp.Message.ToolCalls
+			}
 			return nil
 		})
 
@@ -301,17 +402,28 @@ func main() {
 			})
 		}
 
+		// * create content blocks based on response type
+		var contentBlocks []anthropic.ContentBlock
+
+		if len(toolCalls) > 0 {
+			// * process tool calls into Anthropic format
+			contentBlocks = procedure.ProcessToolCalls(toolCalls)
+		} else {
+			// * regular text response
+			contentBlocks = []anthropic.ContentBlock{{Type: anthropic.ContentBlockTypeText, Text: output}}
+		}
+
 		// * create anthropic response format
 		response := anthropic.Message{
 			ID:         "msg_" + *gut.Random(gut.RandomSet.MixedAlphaNum, 24),
 			Type:       "message",
 			Role:       anthropic.MessageRoleAssistant,
-			Content:    []anthropic.ContentBlock{{Type: anthropic.ContentBlockTypeText, Text: output}},
+			Content:    contentBlocks,
 			Model:      *body.Model,
 			StopReason: "end_turn",
 			Usage: anthropic.Usage{
-				InputTokens:  100, // estimate
-				OutputTokens: 100, // estimate
+				InputTokens:  100,
+				OutputTokens: 100,
 			},
 		}
 

@@ -43,6 +43,22 @@ type ContentItem struct {
 	CacheControlType *CacheControl `json:"cache_control,omitempty"`
 	Type             *string       `json:"type"`
 	Text             *string       `json:"text"`
+	ToolUse          *ToolUse      `json:"tool_use,omitempty"`
+	ToolResult       *ToolResult   `json:"tool_result,omitempty"`
+}
+
+type ToolUse struct {
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	Name  string `json:"name"`
+	Input any    `json:"input"`
+}
+
+// ToolResult represents the result of a tool call
+type ToolResult struct {
+	ToolCallID string `json:"tool_call_id"`
+	Type       string `json:"type"`
+	Content    any    `json:"content"`
 }
 
 type SystemMessage struct {
@@ -56,24 +72,20 @@ type CacheControl struct {
 }
 
 type Tool struct {
+	Name        *string      `json:"name"`
 	Description *string      `json:"description"`
 	InputSchema *InputSchema `json:"input_schema"`
-	Name        *string      `json:"name"`
 }
 
 type InputSchema struct {
-	Schema               *string           `json:"$schema"`
-	AdditionalProperties *bool             `json:"additionalProperties"`
-	Properties           *SchemaProperties `json:"properties"`
-	Required             []*string         `json:"required"`
-	Type                 *string           `json:"type"`
+	Type                 *string                         `json:"type"`
+	AdditionalProperties *bool                           `json:"additionalProperties"`
+	Properties           map[string]*InputSchemaProperty `json:"properties"`
+	Required             []*string                       `json:"required"`
 }
 
-type SchemaProperties struct {
-	Prompt *PromptProperty `json:"prompt"`
-}
-
-type PromptProperty struct {
-	Description *string `json:"description"`
-	Type        *string `json:"type"`
+type InputSchemaProperty struct {
+	Description *string   `json:"description"`
+	Type        *string   `json:"type"`
+	Enum        []*string `json:"enum,omitempty"`
 }
