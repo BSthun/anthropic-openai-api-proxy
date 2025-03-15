@@ -40,18 +40,14 @@ func (r *RequestContent) UnmarshalJSON(data []byte) error {
 }
 
 type ContentItem struct {
-	CacheControlType *CacheControl `json:"cache_control,omitempty"`
-	Type             *string       `json:"type"`
-	Text             *string       `json:"text"`
-	ToolUse          *ToolUse      `json:"tool_use,omitempty"`
-	ToolResult       *ToolResult   `json:"tool_result,omitempty"`
-}
-
-type ToolUse struct {
-	ID    string `json:"id"`
-	Type  string `json:"type"`
-	Name  string `json:"name"`
-	Input any    `json:"input"`
+	Type             *string        `json:"type"`
+	Text             *string        `json:"text"`
+	Id               *string        `json:"id"`
+	Name             *string        `json:"name,omitempty"`
+	Input            map[string]any `json:"input,omitempty"`
+	Content          *string        `json:"content,omitempty"`
+	ToolUseId        *string        `json:"tool_use_id,omitempty"`
+	CacheControlType *CacheControl  `json:"cache_control,omitempty"`
 }
 
 // ToolResult represents the result of a tool call

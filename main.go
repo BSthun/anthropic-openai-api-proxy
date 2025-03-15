@@ -57,7 +57,6 @@ func main() {
 	app.Post("/v1/messages", func(c *fiber.Ctx) error {
 		body := new(extern.Request)
 		if err := c.BodyParser(&body); err != nil {
-			println(err.Error())
 			return gut.Err(false, "unable to parse body", err)
 		}
 
@@ -91,15 +90,15 @@ func main() {
 				continue
 			}
 
-			ollamaMsg := api.Message{
-				Role: strings.ToLower(*message.Role), // convert Anthropic role to Ollama role
+			ollamaMessage := api.Message{
+				Role:      strings.ToLower(*message.Role),
+				Content:   "",
+				Images:    nil,
+				ToolCalls: nil,
 			}
 
-			var textParts []string
-
 			if message.Content.Text != nil {
-				// * add text content
-				textParts = append(textParts, *message.Content.Text)
+				ollamaMessage.Content = *message.Content.Text
 			} else {
 				for _, content := range message.Content.Content {
 					if content.Type == nil {
@@ -108,36 +107,34 @@ func main() {
 
 					switch *content.Type {
 					case "text":
-						// * add text content
-						if content.Text != nil {
-							textParts = append(textParts, *content.Text)
-						}
+						ollamaMessage.Content = *content.Text
 					case "image":
-						// TODO: handle image content
+						// TODO: Add image handling
 					case "tool_use":
-						// Process tool_use content
-						if content.ToolUse != nil {
-							// TODO: handle tool_use content
+						if content.Name != nil && content.Input != nil {
+							// Add function call to the message
+							ollamaMessage.ToolCalls = append(ollamaMessage.ToolCalls, api.ToolCall{
+								Function: api.ToolCallFunction{
+									Name:      *content.Name,
+									Arguments: content.Input,
+									Index:     0,
+								},
+							})
 						}
 					case "tool_result":
-						// Process tool_result content
-						if content.ToolResult != nil {
-							// TODO: handle tool_result content
-						}
+						ollamaMessage.Content = *content.Content
 					}
 				}
 			}
 
-			// * combine text parts
-			ollamaMsg.Content = strings.Join(textParts, "\n")
-
 			// * add message to list
-			ollamaMessages = append(ollamaMessages, ollamaMsg)
+			ollamaMessages = append(ollamaMessages, ollamaMessage)
 		}
 
 		// * prepare options
 		options := map[string]any{
-			"num_predict": 256, // default token limit
+			"num_ctx":     8192,
+			"num_predict": 8192,
 		}
 
 		// * set max tokens if provided
@@ -178,17 +175,17 @@ func main() {
 				messageId := "msg_" + *gut.Random(gut.RandomSet.MixedAlphaNum, 24)
 
 				// * send message_start event
-				messageStart := map[string]interface{}{
+				messageStart := map[string]any{
 					"type": "message_start",
-					"message": map[string]interface{}{
+					"message": map[string]any{
 						"id":            messageId,
 						"type":          "message",
 						"role":          "assistant",
 						"model":         *body.Model,
-						"content":       []map[string]interface{}{},
+						"content":       []map[string]any{},
 						"stop_reason":   nil,
 						"stop_sequence": nil,
-						"usage": map[string]interface{}{
+						"usage": map[string]any{
 							"input_tokens":                15,
 							"cache_creation_input_tokens": 0,
 							"cache_read_input_tokens":     0,
@@ -222,7 +219,7 @@ func main() {
 
 				// * send content_block_start event based on whether we have tool calls
 				contentBlockType := "text"
-				contentBlock := map[string]interface{}{
+				contentBlock := map[string]any{
 					"type": "text",
 					"text": "",
 				}
@@ -232,8 +229,8 @@ func main() {
 					contentBlockType = "tool_use"
 
 					// Parse arguments from string to map if possible
-					var inputMap map[string]interface{}
-					var toolInput interface{} = map[string]interface{}{}
+					var inputMap map[string]any
+					var toolInput any = map[string]any{}
 
 					if toolCallArgs != "" {
 						if err := json.Unmarshal([]byte(toolCallArgs), &inputMap); err == nil {
@@ -243,20 +240,15 @@ func main() {
 						}
 					}
 
-					toolUse := map[string]interface{}{
+					contentBlock = map[string]any{
+						"type":  "tool_use",
 						"id":    toolCallId,
-						"type":  "function",
 						"name":  toolCallName,
 						"input": toolInput,
 					}
-
-					contentBlock = map[string]interface{}{
-						"type":     "tool_use",
-						"tool_use": toolUse,
-					}
 				}
 
-				contentBlockStart := map[string]interface{}{
+				contentBlockStart := map[string]any{
 					"type":          "content_block_start",
 					"index":         0,
 					"content_block": contentBlock,
@@ -267,7 +259,7 @@ func main() {
 				}
 
 				// * send initial ping event
-				pingEvent := map[string]interface{}{
+				pingEvent := map[string]any{
 					"type": "ping",
 				}
 				if pingData, err := json.Marshal(pingEvent); err == nil {
@@ -276,7 +268,7 @@ func main() {
 
 				// * call ollama with streaming
 				var accumulatedResponse string
-				var toolCallData map[string]interface{}
+				var toolCallData map[string]any
 				outputTokens := 0
 
 				err = client.Chat(context.Background(), request, func(resp api.ChatResponse) error {
@@ -291,16 +283,16 @@ func main() {
 							// Only process if we have function data
 							if tc.Function.Name != "" {
 								// Create or update tool call data
-								toolCallData = map[string]interface{}{
+								toolCallData = map[string]any{
 									"name":  tc.Function.Name,
 									"input": tc.Function.Arguments,
 								}
 
 								// Create Anthropic delta format
-								chunk := map[string]interface{}{
+								chunk := map[string]any{
 									"type":  "content_block_delta",
 									"index": 0,
-									"delta": map[string]interface{}{
+									"delta": map[string]any{
 										"type":     "tool_use_delta",
 										"tool_use": toolCallData,
 									},
@@ -314,10 +306,10 @@ func main() {
 						}
 					} else if resp.Message.Content != "" {
 						// Regular text content streaming
-						chunk := map[string]interface{}{
+						chunk := map[string]any{
 							"type":  "content_block_delta",
 							"index": 0,
-							"delta": map[string]interface{}{
+							"delta": map[string]any{
 								"type": "text_delta",
 								"text": resp.Message.Content,
 							},
@@ -334,9 +326,9 @@ func main() {
 
 				if err != nil {
 					// * handle error in stream
-					errorChunk := map[string]interface{}{
+					errorChunk := map[string]any{
 						"type": "error",
-						"error": map[string]interface{}{
+						"error": map[string]any{
 							"message": "Failed to generate response from Ollama",
 							"type":    "server_error",
 						},
@@ -348,7 +340,7 @@ func main() {
 				}
 
 				// * send content_block_stop
-				contentBlockStop := map[string]interface{}{
+				contentBlockStop := map[string]any{
 					"type":  "content_block_stop",
 					"index": 0,
 				}
@@ -357,13 +349,13 @@ func main() {
 				}
 
 				// * send message_delta
-				messageDelta := map[string]interface{}{
+				messageDelta := map[string]any{
 					"type": "message_delta",
-					"delta": map[string]interface{}{
+					"delta": map[string]any{
 						"stop_reason":   "end_turn",
 						"stop_sequence": nil,
 					},
-					"usage": map[string]interface{}{
+					"usage": map[string]any{
 						"output_tokens": outputTokens,
 					},
 				}
@@ -372,7 +364,7 @@ func main() {
 				}
 
 				// * send message_stop
-				messageStop := map[string]interface{}{
+				messageStop := map[string]any{
 					"type": "message_stop",
 				}
 				if messageStopData, err := json.Marshal(messageStop); err == nil {
