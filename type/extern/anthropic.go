@@ -1,6 +1,8 @@
 package extern
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 type Request struct {
 	MaxTokens   *int              `json:"max_tokens"`

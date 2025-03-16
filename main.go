@@ -23,8 +23,8 @@ import (
 
 func main() {
 	// * config
-	ollamaEndpoint := "http://10.2.1.134:11434"
-	ollamaModel := "qwen2.5-coder:14b"
+	ollamaEndpoint := "https://jtkkibqf2kntke-11434.proxy.runpod.net"
+	ollamaModel := "qwen2.5-coder:32b"
 	listen := ":3880"
 
 	// * initialize ollama client
@@ -34,7 +34,7 @@ func main() {
 	}
 
 	client := api.NewClient(ollamaEndpointUrl, &http.Client{
-		Timeout: 60 * time.Second,
+		Timeout: 1 * time.Hour,
 	})
 
 	// * create fiber app
